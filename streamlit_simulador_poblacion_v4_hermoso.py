@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from io import BytesIO
+from io import BytesIO, StringIO
 
 st.set_page_config(
     page_title='Urban Waste Circularity Observatory',
@@ -308,8 +308,8 @@ def project_city(row, start_year, end_year, scenario_name, overrides=None):
 # FIX 3 — cache all projections so reruns on sidebar interactions are free.
 @st.cache_data(show_spinner='Running simulation…')
 def run_projection(inputs_json, start_year, end_year, scenario_name, overrides_json=None):
-    inputs = pd.read_json(inputs_json, orient='split')
-    overrides = None if overrides_json is None else pd.read_json(overrides_json, orient='index').iloc[0].to_dict()
+    inputs = pd.read_json(StringIO(inputs_json), orient='split')
+    overrides = None if overrides_json is None else pd.read_json(StringIO(overrides_json), orient='index').iloc[0].to_dict()
     frames = [
         project_city(row, start_year, end_year, scenario_name, overrides)
         for _, row in inputs.iterrows()
@@ -423,7 +423,7 @@ def make_sankey(row):
 # interpretable even when the active scenario already has high targets.
 @st.cache_data(show_spinner=False)
 def sensitivity_analysis(inputs_json, selected_city, start_year, end_year, scenario_name, selected_year):
-    inputs = pd.read_json(inputs_json, orient='split')
+    inputs = pd.read_json(StringIO(inputs_json), orient='split')
     baseline = run_projection(inputs_json, start_year, end_year, scenario_name)
     base_row = baseline[(baseline['city'] == selected_city) & (baseline['year'] == selected_year)].iloc[0]
 
