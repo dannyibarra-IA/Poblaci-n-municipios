@@ -59,6 +59,29 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"]{color:#102a43;font-wei
 .hero-meta{color:#5f6f7f;font-size:.92rem;position:relative;z-index:1;margin-bottom:.75rem;}
 .badge-row{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.2rem;position:relative;z-index:1}.badge{background:rgba(255,255,255,.80);border:1px solid rgba(16,42,67,.10);border-radius:999px;padding:.35rem .72rem;color:#102a43;font-size:.82rem;font-weight:750;}
 .scenario-card{border-radius:18px;padding:1rem 1.1rem;border:1px solid rgba(16,42,67,.10);box-shadow:0 8px 22px rgba(16,42,67,.07);margin:.6rem 0 1rem}.scenario-title{font-size:1.25rem;font-weight:900;margin-bottom:.25rem;color:#102a43}.scenario-text{font-size:.94rem;color:#486581;line-height:1.45}.insight-box{background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(247,250,253,.98));border:1px solid rgba(16,42,67,.10);border-left:6px solid #0d5c91;border-radius:18px;padding:1rem 1.1rem;box-shadow:0 8px 22px rgba(16,42,67,.07);margin:.6rem 0 1rem;color:#334e68;line-height:1.5}.section-help{background:rgba(13,92,145,.08);border:1px solid rgba(13,92,145,.13);border-radius:16px;padding:.85rem 1rem;color:#23435c;line-height:1.5;margin:.5rem 0 1rem}.stTabs [data-baseweb="tab"]{font-size:.88rem;font-weight:800;color:#102a43}.stTabs [aria-selected="true"]{color:#0d5c91!important}.footer{text-align:center;color:#5f6f7f;font-size:.86rem;padding:1.2rem 0 .4rem}
+
+.landing-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;margin:1rem 0 1.2rem 0;}
+.feature-card{background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(247,250,253,.98));border:1px solid rgba(16,42,67,.10);border-radius:22px;padding:1.05rem 1.1rem;box-shadow:0 10px 26px rgba(16,42,67,.075);min-height:148px;}
+.feature-icon{font-size:1.55rem;margin-bottom:.45rem;}
+.feature-title{font-weight:900;color:#102a43;font-size:1.02rem;margin-bottom:.32rem;}
+.feature-text{color:#486581;font-size:.91rem;line-height:1.45;}
+.cta-row{display:flex;flex-wrap:wrap;gap:.7rem;margin-top:.9rem;position:relative;z-index:1;}
+.cta-primary,.cta-secondary{display:inline-block;border-radius:999px;padding:.72rem 1.05rem;font-weight:850;font-size:.92rem;text-decoration:none;border:1px solid rgba(16,42,67,.12);}
+.cta-primary{background:linear-gradient(135deg,#0d5c91,#2f7d6b);color:white!important;box-shadow:0 10px 24px rgba(13,92,145,.18);}
+.cta-secondary{background:rgba(255,255,255,.78);color:#102a43!important;}
+.workflow{background:rgba(255,255,255,.78);border:1px solid rgba(16,42,67,.10);border-radius:24px;padding:1.1rem 1.25rem;margin:0 0 1rem 0;box-shadow:0 10px 26px rgba(16,42,67,.06);}
+.workflow-title{font-weight:950;font-size:1.25rem;color:#102a43;margin-bottom:.75rem;}
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem;}
+.step{display:flex;gap:.75rem;align-items:flex-start;background:linear-gradient(180deg,#ffffff,#f8fbfd);border:1px solid rgba(16,42,67,.08);border-radius:18px;padding:.9rem;}
+.step-num{min-width:2rem;height:2rem;border-radius:999px;background:#0d5c91;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;}
+.step-title{font-weight:900;color:#102a43;margin-bottom:.18rem;}
+.step-text{color:#486581;font-size:.9rem;line-height:1.4;}
+.home-panel{background:linear-gradient(135deg,rgba(16,42,67,.92),rgba(13,92,145,.88));border-radius:26px;padding:1.2rem 1.25rem;margin:1rem 0;box-shadow:0 14px 34px rgba(16,42,67,.16);color:white;}
+.home-panel h3{color:white;margin:.1rem 0 .4rem 0;}
+.home-panel p{color:rgba(255,255,255,.84);line-height:1.5;margin-bottom:.3rem;}
+.micro-label{font-size:.76rem;text-transform:uppercase;letter-spacing:.10em;font-weight:900;color:#0d5c91;margin-bottom:.4rem;}
+@media (max-width: 1000px){.landing-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.steps{grid-template-columns:1fr;}.hero-title{font-size:2rem;}}
+
 </style>
 ''', unsafe_allow_html=True)
 
@@ -219,10 +242,46 @@ def quick_insight(row, scenario_name):
     return f"Under **{scenario_name}**, **{row['city']}** shows **{risk.lower()} operational risk**, a **{light.lower()} circularity status**, a diversion rate of **{human_format(row['diversion_rate']*100,1)}%**, and approximately **{ytc_text}** before landfill exhaustion under current assumptions."
 
 # ------------------------- hero -------------------------
-st.markdown('''<div class="hero-box"><div class="hero-kicker">Academic decision-support platform</div><div class="hero-title">Urban Waste Simulation and Circularity Observatory</div><div class="hero-subtitle">Open-source prospective software for simulating waste generation, circularity pathways and landfill stress across Colombian cities. Designed as a decision-support platform for urban environmental planning and scalable analysis in Latin America.</div><div class="hero-meta">Developed by <b>Danny Ibarra Vega, Ph.D.</b> · Universidad de Antioquia · Waste systems, circular economy and dynamic simulation</div><div class="badge-row"><span class="badge">Open-source</span><span class="badge">Scenario simulator</span><span class="badge">Circularity metrics</span><span class="badge">Landfill risk</span><span class="badge">Latin America ready</span></div></div>''', unsafe_allow_html=True)
+st.markdown('''
+<div class="hero-box">
+    <div class="hero-kicker">Circular waste futures lab</div>
+    <div class="hero-title">Simulate circular waste futures for Latin American cities</div>
+    <div class="hero-subtitle">
+        An open-source decision-support simulator for exploring municipal solid waste generation, circularity pathways,
+        landfill pressure and territorial risk. Build scenarios, compare futures and translate waste data into better urban decisions.
+    </div>
+    <div class="hero-meta">Developed by <b>Danny Ibarra Vega, Ph.D.</b> · Universidad de Antioquia · Waste systems, circular economy and dynamic simulation</div>
+    <div class="badge-row">
+        <span class="badge">Open-source</span><span class="badge">Scenario-based</span><span class="badge">Landfill stress</span><span class="badge">Circularity analytics</span><span class="badge">Replicable in Latin America</span>
+    </div>
+    <div class="cta-row">
+        <a class="cta-primary">Start simulation</a>
+        <a class="cta-secondary">Compare scenarios</a>
+        <a class="cta-secondary">Download template</a>
+    </div>
+</div>
+''', unsafe_allow_html=True)
+
+st.markdown('''
+<div class="landing-grid">
+  <div class="feature-card"><div class="feature-icon">⚡</div><div class="feature-title">Easy to start</div><div class="feature-text">Use minimum city-level inputs: population, per-capita waste, composition and landfill capacity.</div></div>
+  <div class="feature-card"><div class="feature-icon">🔁</div><div class="feature-title">Scenario simulator</div><div class="feature-text">Explore BAU, critical stress, moderate, accelerated and optimistic circularity pathways.</div></div>
+  <div class="feature-card"><div class="feature-icon">📊</div><div class="feature-title">Decision analytics</div><div class="feature-text">Track avoided landfill, diversion, remaining capacity, operational risk and priority ranking.</div></div>
+  <div class="feature-card"><div class="feature-icon">🌎</div><div class="feature-title">Latin America ready</div><div class="feature-text">Designed to be replicated in any city with basic waste and population information.</div></div>
+</div>
+
+<div class="workflow">
+  <div class="workflow-title">How it works</div>
+  <div class="steps">
+    <div class="step"><div class="step-num">1</div><div><div class="step-title">Enter city data</div><div class="step-text">Load or edit population, waste generation, composition and landfill capacity.</div></div></div>
+    <div class="step"><div class="step-num">2</div><div><div class="step-title">Run scenarios</div><div class="step-text">Switch between baseline, stress and circularity transition pathways.</div></div></div>
+    <div class="step"><div class="step-num">3</div><div><div class="step-title">Interpret decisions</div><div class="step-text">Compare risk, avoided disposal, circularity gains and intervention priorities.</div></div></div>
+  </div>
+</div>
+''', unsafe_allow_html=True)
 
 # ------------------------- sidebar -------------------------
-st.sidebar.markdown('## Simulation control')
+st.sidebar.markdown('## Control room')
 st.sidebar.markdown('### 1. Simulation horizon')
 start_year = st.sidebar.number_input('Start year', min_value=2020, max_value=2050, value=2025, step=1)
 end_year = st.sidebar.number_input('End year', min_value=int(start_year)+1, max_value=2100, value=2050, step=1)
@@ -279,6 +338,13 @@ k1.metric('City', selected_city); k2.metric('Population', human_format(selected_
 m1,m2,m3 = st.columns(3)
 m1.metric('Cumulative avoided landfill vs BAU', f"{human_format(comparison_selected_row['cumulative_avoided_landfill_vs_bau_t'],0)} t"); m2.metric('Additional diversion vs BAU', f"{human_format(comparison_selected_row['additional_diversion_vs_bau_t'],0)} t/y"); m3.metric('Circularity status', selected_light)
 st.markdown(f'''<div class="insight-box"><b>Quick insight.</b> {quick_insight(selected_row, scenario_name)}</div>''', unsafe_allow_html=True)
+st.markdown(f'''
+<div class="home-panel">
+  <div class="micro-label" style="color:rgba(255,255,255,.72);">Live simulation cockpit</div>
+  <h3>{selected_city} · {selected_year} · {scenario_name}</h3>
+  <p>This cockpit summarizes the active future pathway. Use the tabs below to move from high-level indicators to composition, geography, scenario comparison, Sankey flows, sensitivity and alerts.</p>
+</div>
+''', unsafe_allow_html=True)
 
 tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs(['📈 Projections','♻️ Composition','🗺️ Geography','🧭 Circularity indicators','🔁 Scenario comparison','🌊 Flow Sankey','🧪 Sensitivity','🚨 Alerts & priority','📐 Methodology','⬇️ Export'])
 
@@ -399,3 +465,4 @@ with tab10:
     with st.expander('Preview results'): st.dataframe(results, use_container_width=True)
 
 st.markdown('<div class="footer">Urban Waste Simulation and Circularity Observatory · Open-source decision-support software for circular waste planning.</div>', unsafe_allow_html=True)
+
