@@ -399,6 +399,3 @@ with tab10:
     with st.expander('Preview results'): st.dataframe(results, use_container_width=True)
 
 st.markdown('<div class="footer">Urban Waste Simulation and Circularity Observatory · Open-source decision-support software for circular waste planning.</div>', unsafe_allow_html=True)
-
-    with st.expander("Preview results"):
-        st.dataframe(results, use_container_width=True)
