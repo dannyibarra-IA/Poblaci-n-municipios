@@ -363,6 +363,13 @@ st.sidebar.header("Simulation settings")
 start_year = st.sidebar.number_input("Start year", min_value=2020, max_value=2050, value=2025, step=1)
 end_year = st.sidebar.number_input("End year", min_value=int(start_year) + 1, max_value=2100, value=2050, step=1)
 scenario_name = st.sidebar.selectbox("Scenario", list(SCENARIOS.keys()), index=0)
+comparison_scenarios = st.sidebar.multiselect(
+    "Scenarios to compare",
+    list(SCENARIOS.keys()),
+    default=list(SCENARIOS.keys()),
+)
+if not comparison_scenarios:
+    comparison_scenarios = [scenario_name]
 
 st.sidebar.download_button(
     "Download input template (.xlsx)",
@@ -398,6 +405,10 @@ with st.expander("Edit input data", expanded=False):
 # MODEL EXECUTION
 # =========================================================
 results = run_projection(inputs, int(start_year), int(end_year), scenario_name)
+scenario_results = pd.concat(
+    [run_projection(inputs, int(start_year), int(end_year), s) for s in comparison_scenarios],
+    ignore_index=True,
+)
 bau = compute_bau_reference(inputs, int(start_year), int(end_year))
 
 comparison = results.merge(
@@ -424,22 +435,26 @@ comparison_city = comparison[comparison["city"] == selected_city].copy()
 # =========================================================
 st.subheader(f"Scenario: {scenario_name} — {SCENARIOS[scenario_name]['label']}")
 
-k1, k2, k3, k4, k5 = st.columns(5)
+k1, k2, k3, k4, k5, k6 = st.columns(6)
 k1.metric("City", selected_city)
 k2.metric("Population", human_format(selected_row["population"], 0))
 k3.metric("Generated", f"{human_format(selected_row['generated_t'], 0)} t/y")
 k4.metric("Diverted", f"{human_format(selected_row['diverted_t'], 0)} t/y")
 k5.metric("Diversion rate", f"{human_format(selected_row['diversion_rate'] * 100, 1)}%")
+collapse_years = selected_row["landfill_life_years"]
+collapse_text = "∞" if np.isinf(collapse_years) else f"{human_format(collapse_years, 1)} years"
+k6.metric("Years to landfill collapse", collapse_text)
 
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
     [
         "📈 Projections",
         "♻️ Composition",
         "🗺️ Geography",
         "🧭 Circularity indicators",
+        "🔁 Scenario comparison",
         "🚨 Alerts & priority",
         "📐 Methodology",
         "⬇️ Export",
@@ -595,6 +610,84 @@ with tab4:
     st.plotly_chart(fig_avoid, use_container_width=True)
 
 with tab5:
+    st.markdown("### Side-by-side scenario comparison")
+    st.write("This section compares the selected scenarios using the same input data, year and city focus.")
+
+    scenario_city = scenario_results[
+        (scenario_results["city"] == selected_city) & (scenario_results["year"] == selected_year)
+    ].copy()
+
+    if scenario_city.empty:
+        st.info("No scenario data available for the current selection.")
+    else:
+        scenario_table = scenario_city[[
+            "scenario",
+            "population",
+            "generated_t",
+            "collected_t",
+            "diverted_t",
+            "landfilled_t",
+            "diversion_rate",
+            "circularity_gap",
+            "remaining_capacity_t",
+            "landfill_life_years",
+        ]].copy()
+        scenario_table["landfill_life_years"] = scenario_table["landfill_life_years"].replace(np.inf, np.nan)
+
+        st.dataframe(
+            scenario_table.style.format({
+                "population": "{:,.0f}",
+                "generated_t": "{:,.0f}",
+                "collected_t": "{:,.0f}",
+                "diverted_t": "{:,.0f}",
+                "landfilled_t": "{:,.0f}",
+                "diversion_rate": "{:,.1%}",
+                "circularity_gap": "{:,.1%}",
+                "remaining_capacity_t": "{:,.0f}",
+                "landfill_life_years": "{:,.1f}",
+            }),
+            use_container_width=True,
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_side_landfill = px.bar(
+                scenario_city,
+                x="scenario",
+                y="landfilled_t",
+                template=PLOT_TEMPLATE,
+                title=f"Landfilled waste by scenario — {selected_city}, {selected_year}",
+                labels={"scenario": "Scenario", "landfilled_t": "tons/year"},
+                text_auto=".2s",
+            )
+            st.plotly_chart(fig_side_landfill, use_container_width=True)
+        with c2:
+            fig_side_diversion = px.bar(
+                scenario_city,
+                x="scenario",
+                y="diversion_rate",
+                template=PLOT_TEMPLATE,
+                title=f"Diversion rate by scenario — {selected_city}, {selected_year}",
+                labels={"scenario": "Scenario", "diversion_rate": "Diversion rate"},
+                text_auto=".1%",
+            )
+            fig_side_diversion.update_yaxes(tickformat=".0%")
+            st.plotly_chart(fig_side_diversion, use_container_width=True)
+
+        scenario_city_trend = scenario_results[scenario_results["city"] == selected_city].copy()
+        fig_trend_compare = px.line(
+            scenario_city_trend,
+            x="year",
+            y="landfilled_t",
+            color="scenario",
+            markers=True,
+            template=PLOT_TEMPLATE,
+            title=f"Landfilled waste trajectory by scenario — {selected_city}",
+            labels={"year": "Year", "landfilled_t": "tons/year", "scenario": "Scenario"},
+        )
+        st.plotly_chart(fig_trend_compare, use_container_width=True)
+
+with tab6:
     st.markdown("### Alerts and priority ranking")
     st.markdown(f"#### Alerts for {selected_city} in {selected_year}")
     for severity, message in build_alerts(selected_row):
@@ -639,67 +732,39 @@ with tab5:
         use_container_width=True,
     )
 
-with tab6:
-    st.markdown("### Methodology and equations")
-    st.markdown(
-        r"""
-The software implements a discrete dynamic model with annual time steps. For each city, population is projected from a base population and a future validation population:
-
-\[
-r_p = \left(\frac{P_T}{P_0}\right)^{\frac{1}{T-t_0}} - 1
-\]
-
-\[
-P_t = P_0(1+r_p)^{t-t_0}
-\]
-
-Per-capita waste generation evolves according to an annual growth parameter and is adjusted by effective source reduction:
-
-\[
-g_t = g_0(1+r_g)^{t-t_0}(1-S_{eff,t})
-\]
-
-Annual municipal solid waste generation is estimated as:
-
-\[
-W_t = \frac{P_t g_t 365}{1000}
-\]
-
-Collected and uncollected waste are calculated as:
-
-\[
-Q_t = W_t K_{eff,t}
-\]
-
-\[
-U_t = W_t - Q_t
-\]
-
-Recycling and composting are estimated from recoverable and organic fractions:
-
-\[
-Rec_t = \min(Q_t, W_t f_{rec}R_{eff,t})
-\]
-
-\[
-Comp_t = \min(Q_t-Rec_t, W_t f_{org}C_{eff,t})
-\]
-
-Diverted and landfilled waste are calculated as:
-
-\[
-Div_t = Rec_t + Comp_t
-\]
-
-\[
-D_t = \max(0, Q_t - Div_t)
-\]
-
-The main indicators are diversion rate, circularity gap, cumulative landfilled waste and estimated remaining landfill life.
-        """
-    )
-
 with tab7:
+    st.markdown("### Methodology and equations")
+    st.write("The software implements a discrete dynamic model with annual time steps.")
+
+    st.markdown("#### Population projection")
+    st.latex("r_p = (P_T/P_0)^{1/(T-t_0)} - 1")
+    st.latex("P_t = P_0(1+r_p)^{t-t_0}")
+
+    st.markdown("#### Per-capita waste generation")
+    st.latex("g_t = g_0(1+r_g)^{t-t_0}(1-S_{eff,t})")
+
+    st.markdown("#### Annual municipal solid waste generation")
+    st.latex("W_t = P_t g_t 365 / 1000")
+
+    st.markdown("#### Collection and uncollected waste")
+    st.latex("Q_t = W_t K_{eff,t}")
+    st.latex("U_t = W_t - Q_t")
+
+    st.markdown("#### Recycling and composting")
+    st.latex("Rec_t = min(Q_t, W_t f_{rec} R_{eff,t})")
+    st.latex("Comp_t = min(Q_t-Rec_t, W_t f_{org} C_{eff,t})")
+
+    st.markdown("#### Diversion and final disposal")
+    st.latex("Div_t = Rec_t + Comp_t")
+    st.latex("D_t = max(0, Q_t - Div_t)")
+
+    st.markdown("#### Landfill remaining capacity and years to collapse")
+    st.latex("Cap_t = max(0, Cap_0 - sum(D_i))")
+    st.latex("YTC_t = Cap_t / D_t")
+
+    st.write("The main indicators are diversion rate, circularity gap, cumulative landfilled waste, remaining landfill capacity and estimated years to landfill collapse.")
+
+with tab8:
     st.markdown("### Export results")
     st.download_button(
         "Download simulation results (.xlsx)",
