@@ -806,57 +806,117 @@ with tab3:
 with tab4:
     st.markdown("### Circularity indicators")
     st.info(
-        "This section translates the simulation into decision-support indicators. The diversion rate shows the share of generated waste that is recovered through recycling or composting. The circularity gap represents the remaining fraction that is not diverted. Avoided landfill compares the selected scenario against BAU, while cumulative avoided landfill shows the total pressure removed from final disposal over time. These indicators help interpret whether a city is only managing waste or actually moving toward circularity."
+        "This section focuses on operationally meaningful circularity indicators. Landfilled waste shows the pressure on final disposal infrastructure, diverted waste represents the effect of recycling and composting, remaining landfill capacity shows the available disposal buffer, and years to landfill collapse estimates how long the system can operate under the selected scenario. Avoided landfill indicators are shown only when the selected scenario is different from BAU, because under BAU the comparison is zero by definition."
     )
+
+    latest_indicator = city_df[city_df["year"] == selected_year].iloc[0]
+    ind1, ind2, ind3, ind4 = st.columns(4)
+    ind1.metric("Landfilled waste", f"{human_format(latest_indicator['landfilled_t'], 0)} t/y")
+    ind2.metric("Diverted waste", f"{human_format(latest_indicator['diverted_t'], 0)} t/y")
+    ind3.metric("Remaining landfill capacity", f"{human_format(latest_indicator['remaining_capacity_t'], 0)} t")
+    ytc_value = latest_indicator["landfill_life_years"]
+    ind4.metric("Years to landfill collapse", "∞" if np.isinf(ytc_value) else f"{human_format(ytc_value, 1)} years")
+
     c1, c2 = st.columns(2)
     with c1:
-        fig_div = px.line(
+        fig_landfilled = px.line(
             city_df,
             x="year",
-            y="diversion_rate",
+            y="landfilled_t",
             markers=True,
             template=PLOT_TEMPLATE,
-            title=f"Diversion rate — {selected_city}",
-            labels={"year": "Year", "diversion_rate": "Diversion rate"},
+            title=f"Final disposal trajectory — {selected_city}",
+            labels={"year": "Year", "landfilled_t": "Landfilled waste (tons/year)"},
         )
-        fig_div.update_yaxes(tickformat=".0%")
-        st.plotly_chart(fig_div, use_container_width=True)
+        st.plotly_chart(fig_landfilled, use_container_width=True)
     with c2:
-        fig_gap = px.line(
+        fig_diverted = px.line(
             city_df,
             x="year",
-            y="circularity_gap",
+            y="diverted_t",
             markers=True,
             template=PLOT_TEMPLATE,
-            title=f"Circularity gap — {selected_city}",
-            labels={"year": "Year", "circularity_gap": "Circularity gap"},
+            title=f"Diverted waste trajectory — {selected_city}",
+            labels={"year": "Year", "diverted_t": "Diverted waste (tons/year)"},
         )
-        fig_gap.update_yaxes(tickformat=".0%")
-        st.plotly_chart(fig_gap, use_container_width=True)
+        st.plotly_chart(fig_diverted, use_container_width=True)
 
     c3, c4 = st.columns(2)
     with c3:
-        fig_avoid = px.bar(
-            comparison[comparison["year"] == selected_year].sort_values("avoided_landfill_vs_bau_t", ascending=False),
-            x="city",
-            y="avoided_landfill_vs_bau_t",
-            template=PLOT_TEMPLATE,
-            title=f"Avoided landfill compared with BAU — {selected_year}",
-            labels={"city": "City", "avoided_landfill_vs_bau_t": "tons/year"},
-        )
-        fig_avoid.update_layout(xaxis_tickangle=-25)
-        st.plotly_chart(fig_avoid, use_container_width=True)
-    with c4:
-        fig_cum_avoid = px.line(
-            comparison_city,
+        fig_capacity = px.line(
+            city_df,
             x="year",
-            y="cumulative_avoided_landfill_vs_bau_t",
+            y="remaining_capacity_t",
             markers=True,
             template=PLOT_TEMPLATE,
-            title=f"Cumulative avoided landfill vs BAU — {selected_city}",
-            labels={"year": "Year", "cumulative_avoided_landfill_vs_bau_t": "tons"},
+            title=f"Remaining landfill capacity — {selected_city}",
+            labels={"year": "Year", "remaining_capacity_t": "Remaining capacity (tons)"},
         )
-        st.plotly_chart(fig_cum_avoid, use_container_width=True)
+        st.plotly_chart(fig_capacity, use_container_width=True)
+    with c4:
+        ytc_df = city_df.copy()
+        ytc_df["landfill_life_years_plot"] = ytc_df["landfill_life_years"].replace(np.inf, np.nan)
+        fig_ytc = px.line(
+            ytc_df,
+            x="year",
+            y="landfill_life_years_plot",
+            markers=True,
+            template=PLOT_TEMPLATE,
+            title=f"Estimated years to landfill collapse — {selected_city}",
+            labels={"year": "Year", "landfill_life_years_plot": "Years"},
+        )
+        st.plotly_chart(fig_ytc, use_container_width=True)
+
+    st.markdown("### Circularity rates")
+    st.write(
+        "The diversion rate is kept as a compact diagnostic indicator, while the circularity gap is shown as a KPI rather than as a separate curve because it is the complement of the diversion rate."
+    )
+    rate1, rate2, rate3 = st.columns(3)
+    rate1.metric("Diversion rate", f"{human_format(latest_indicator['diversion_rate'] * 100, 1)}%")
+    rate2.metric("Collection rate", f"{human_format(latest_indicator['collection_rate'] * 100, 1)}%")
+    rate3.metric("Circularity gap", f"{human_format(latest_indicator['circularity_gap'] * 100, 1)}%")
+
+    fig_div_rate = px.line(
+        city_df,
+        x="year",
+        y="diversion_rate",
+        markers=True,
+        template=PLOT_TEMPLATE,
+        title=f"Diversion rate trajectory — {selected_city}",
+        labels={"year": "Year", "diversion_rate": "Diversion rate"},
+    )
+    fig_div_rate.update_yaxes(tickformat=".0%")
+    st.plotly_chart(fig_div_rate, use_container_width=True)
+
+    if scenario_name == "BAU":
+        st.warning(
+            "Avoided landfill compared with BAU is not displayed because BAU is the reference scenario. Select Moderate Circularity, Accelerated Circularity or Optimistic Transition to evaluate avoided disposal."
+        )
+    else:
+        st.markdown("### Avoided final disposal compared with BAU")
+        c5, c6 = st.columns(2)
+        with c5:
+            fig_avoid = px.bar(
+                comparison[comparison["year"] == selected_year].sort_values("avoided_landfill_vs_bau_t", ascending=False),
+                x="city",
+                y="avoided_landfill_vs_bau_t",
+                template=PLOT_TEMPLATE,
+                title=f"Avoided landfill compared with BAU — {selected_year}",
+                labels={"city": "City", "avoided_landfill_vs_bau_t": "tons/year"},
+            )
+            fig_avoid.update_layout(xaxis_tickangle=-25)
+            st.plotly_chart(fig_avoid, use_container_width=True)
+        with c6:
+            fig_cum_avoid = px.line(
+                comparison_city,
+                x="year",
+                y="cumulative_avoided_landfill_vs_bau_t",
+                markers=True,
+                template=PLOT_TEMPLATE,
+                title=f"Cumulative avoided landfill vs BAU — {selected_city}",
+                labels={"year": "Year", "cumulative_avoided_landfill_vs_bau_t": "tons"},
+            )
+            st.plotly_chart(fig_cum_avoid, use_container_width=True)
 
 with tab5:
     st.markdown("### Side-by-side scenario comparison")
