@@ -1,125 +1,718 @@
-
 import streamlit as st
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from io import BytesIO
 
-st.set_page_config(page_title="Simulador de Proyección Poblacional", layout="wide")
+# =========================================================
+# PAGE CONFIGURATION
+# =========================================================
+st.set_page_config(
+    page_title="Urban Waste Circularity Simulator",
+    page_icon="♻️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-st.markdown("""
-<style>
-    .main > div {
-        padding-top: 2rem;
+PLOT_TEMPLATE = "plotly_white"
+
+# =========================================================
+# DEFAULT PARAMETERS
+# =========================================================
+FRACTION_COLUMNS = [
+    "organics_pct",
+    "plastics_pct",
+    "paper_cardboard_pct",
+    "glass_pct",
+    "metals_pct",
+    "textiles_pct",
+    "others_pct",
+]
+
+RECOVERABLE_FRACTIONS = [
+    "plastics_pct",
+    "paper_cardboard_pct",
+    "glass_pct",
+    "metals_pct",
+    "textiles_pct",
+]
+
+CITY_COORDS = {
+    "Medellín": (6.2442, -75.5812),
+    "Santiago de Cali": (3.4516, -76.5320),
+    "Barranquilla": (10.9685, -74.7813),
+    "Cartagena de Indias": (10.3910, -75.4794),
+    "Soacha": (4.5833, -74.2167),
+    "San José de Cúcuta": (7.8939, -72.5078),
+    "Soledad": (10.9184, -74.7646),
+    "Bucaramanga": (7.1254, -73.1198),
+    "Bello": (6.3373, -75.5540),
+    "Valledupar": (10.4631, -73.2532),
+}
+
+DEFAULT_INPUTS = pd.DataFrame(
+    [
+        ["Medellín", 2025, 2650000, 2050, 3000000, 0.78, 0.002, 12000000, 52, 13, 12, 4, 2, 5, 12],
+        ["Santiago de Cali", 2025, 2280000, 2050, 2600000, 0.80, 0.002, 8500000, 50, 14, 11, 4, 2, 4, 15],
+        ["Barranquilla", 2025, 1320000, 2050, 1550000, 0.85, 0.003, 7000000, 49, 15, 10, 4, 2, 5, 15],
+        ["Cartagena de Indias", 2025, 1100000, 2050, 1320000, 0.82, 0.003, 5500000, 51, 14, 10, 4, 2, 4, 15],
+        ["Soacha", 2025, 820000, 2050, 1050000, 0.74, 0.003, 4000000, 53, 13, 10, 3, 2, 5, 14],
+        ["San José de Cúcuta", 2025, 800000, 2050, 960000, 0.77, 0.002, 4500000, 52, 13, 11, 4, 2, 4, 14],
+        ["Soledad", 2025, 740000, 2050, 910000, 0.79, 0.003, 4200000, 50, 15, 10, 4, 2, 5, 14],
+        ["Bucaramanga", 2025, 620000, 2050, 700000, 0.76, 0.001, 5200000, 51, 13, 12, 4, 2, 4, 14],
+        ["Bello", 2025, 560000, 2050, 660000, 0.75, 0.002, 3600000, 52, 13, 11, 4, 2, 5, 13],
+        ["Valledupar", 2025, 560000, 2050, 700000, 0.81, 0.003, 3300000, 51, 14, 10, 4, 2, 5, 14],
+    ],
+    columns=[
+        "city",
+        "base_year",
+        "population_base",
+        "validation_year",
+        "population_validation",
+        "gpc_base_kg_person_day",
+        "gpc_annual_growth",
+        "landfill_remaining_capacity_t",
+        *FRACTION_COLUMNS,
+    ],
+)
+
+SCENARIOS = {
+    "BAU": {
+        "source_reduction_target": 0.00,
+        "collection_target": 0.85,
+        "recycling_target": 0.18,
+        "composting_target": 0.08,
+        "education_bonus_target": 0.00,
+        "formalization_bonus_target": 0.00,
+        "label": "Business as usual",
+    },
+    "Moderate Circularity": {
+        "source_reduction_target": 0.05,
+        "collection_target": 0.90,
+        "recycling_target": 0.28,
+        "composting_target": 0.16,
+        "education_bonus_target": 0.03,
+        "formalization_bonus_target": 0.04,
+        "label": "Moderate intervention",
+    },
+    "Accelerated Circularity": {
+        "source_reduction_target": 0.12,
+        "collection_target": 0.96,
+        "recycling_target": 0.40,
+        "composting_target": 0.28,
+        "education_bonus_target": 0.06,
+        "formalization_bonus_target": 0.08,
+        "label": "High circularity push",
+    },
+}
+
+# =========================================================
+# HELPERS
+# =========================================================
+def human_format(value, decimals=0):
+    try:
+        if pd.isna(value):
+            return "N/A"
+        return f"{float(value):,.{decimals}f}"
+    except Exception:
+        return str(value)
+
+
+def validate_inputs(df):
+    required = {
+        "city",
+        "base_year",
+        "population_base",
+        "validation_year",
+        "population_validation",
+        "gpc_base_kg_person_day",
+        "gpc_annual_growth",
+        "landfill_remaining_capacity_t",
+        *FRACTION_COLUMNS,
     }
-    .css-18e3th9 {
-        padding-top: 2rem;
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(sorted(missing))}")
+
+    out = df.copy()
+    out["city"] = out["city"].astype(str).str.strip()
+    numeric_cols = [c for c in out.columns if c != "city"]
+    for col in numeric_cols:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    out = out.dropna(subset=["city", "base_year", "population_base", "validation_year", "population_validation"])
+    out["base_year"] = out["base_year"].astype(int)
+    out["validation_year"] = out["validation_year"].astype(int)
+
+    if (out["population_base"] <= 0).any() or (out["population_validation"] <= 0).any():
+        raise ValueError("Population values must be greater than zero.")
+
+    if (out["validation_year"] <= out["base_year"]).any():
+        raise ValueError("validation_year must be greater than base_year for every city.")
+
+    out["fraction_sum_pct"] = out[FRACTION_COLUMNS].sum(axis=1)
+    if not np.allclose(out["fraction_sum_pct"], 100, atol=2.0):
+        st.warning("Some composition percentages do not add up to 100%. They will be normalized internally.")
+
+    return out
+
+
+def input_template_to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="city_inputs", index=False)
+    return output.getvalue()
+
+
+@st.cache_data(show_spinner=False)
+def load_input_file(uploaded_file):
+    df = pd.read_excel(uploaded_file, sheet_name="city_inputs")
+    return validate_inputs(df)
+
+
+def interpolate_policy(start_value, target_value, year, start_year, end_year):
+    if end_year <= start_year:
+        return float(target_value)
+    alpha = np.clip((year - start_year) / (end_year - start_year), 0, 1)
+    return float(start_value + alpha * (target_value - start_value))
+
+
+def effective_policy_params(source_reduction, collection, recycling, composting, education_bonus, formalization_bonus):
+    eff_recycling = min(0.95, recycling + education_bonus * 0.35 + formalization_bonus * 0.65)
+    eff_composting = min(0.90, composting + education_bonus * 0.50)
+    eff_collection = min(0.99, collection + education_bonus * 0.20)
+    eff_source = min(0.35, source_reduction + education_bonus * 0.15)
+    return eff_source, eff_collection, eff_recycling, eff_composting
+
+
+def project_city(row, start_year, end_year, scenario_name):
+    scenario = SCENARIOS[scenario_name]
+    base_year = int(row["base_year"])
+    validation_year = int(row["validation_year"])
+    p0 = float(row["population_base"])
+    p_validation = float(row["population_validation"])
+    gpc0 = float(row["gpc_base_kg_person_day"])
+    gpc_growth = float(row["gpc_annual_growth"])
+    capacity = float(row["landfill_remaining_capacity_t"])
+
+    rp = (p_validation / p0) ** (1 / (validation_year - base_year)) - 1
+
+    fractions_raw = row[FRACTION_COLUMNS].astype(float) / 100
+    fractions = fractions_raw / fractions_raw.sum() if fractions_raw.sum() > 0 else fractions_raw
+    f_org = float(fractions["organics_pct"])
+    f_rec = float(fractions[RECOVERABLE_FRACTIONS].sum())
+
+    records = []
+    cumulative_landfilled = 0.0
+
+    for year in range(start_year, end_year + 1):
+        dt = year - base_year
+        population = p0 * ((1 + rp) ** dt)
+        gpc_without_prevention = gpc0 * ((1 + gpc_growth) ** dt)
+
+        source_reduction = interpolate_policy(0, scenario["source_reduction_target"], year, start_year, end_year)
+        collection = interpolate_policy(0.85, scenario["collection_target"], year, start_year, end_year)
+        recycling = interpolate_policy(0.18, scenario["recycling_target"], year, start_year, end_year)
+        composting = interpolate_policy(0.08, scenario["composting_target"], year, start_year, end_year)
+        education_bonus = interpolate_policy(0, scenario["education_bonus_target"], year, start_year, end_year)
+        formalization_bonus = interpolate_policy(0, scenario["formalization_bonus_target"], year, start_year, end_year)
+
+        eff_source, eff_collection, eff_recycling, eff_composting = effective_policy_params(
+            source_reduction, collection, recycling, composting, education_bonus, formalization_bonus
+        )
+
+        gpc_effective = gpc_without_prevention * (1 - eff_source)
+        generated_t = population * gpc_effective * 365 / 1000
+        collected_t = generated_t * eff_collection
+        uncollected_t = generated_t - collected_t
+
+        recoverable_pool_t = generated_t * f_rec
+        organics_pool_t = generated_t * f_org
+
+        recycled_t = min(collected_t, recoverable_pool_t * eff_recycling)
+        remaining_after_recycling_t = max(0, collected_t - recycled_t)
+        composted_t = min(remaining_after_recycling_t, organics_pool_t * eff_composting)
+        diverted_t = recycled_t + composted_t
+        landfilled_t = max(0, collected_t - diverted_t)
+        cumulative_landfilled += landfilled_t
+        remaining_capacity_t = max(0, capacity - cumulative_landfilled)
+
+        diversion_rate = diverted_t / generated_t if generated_t > 0 else 0
+        collection_rate = collected_t / generated_t if generated_t > 0 else 0
+        landfill_life_years = remaining_capacity_t / landfilled_t if landfilled_t > 0 else np.inf
+        circularity_gap = max(0, 1 - diversion_rate)
+
+        fraction_amounts = {col.replace("_pct", "_t"): generated_t * float(fractions[col]) for col in FRACTION_COLUMNS}
+
+        records.append(
+            {
+                "city": row["city"],
+                "year": year,
+                "scenario": scenario_name,
+                "population": population,
+                "population_growth_rate": rp,
+                "gpc_without_prevention_kg_person_day": gpc_without_prevention,
+                "gpc_effective_kg_person_day": gpc_effective,
+                "generated_t": generated_t,
+                "collected_t": collected_t,
+                "uncollected_t": uncollected_t,
+                "recycled_t": recycled_t,
+                "composted_t": composted_t,
+                "diverted_t": diverted_t,
+                "landfilled_t": landfilled_t,
+                "cumulative_landfilled_t": cumulative_landfilled,
+                "remaining_capacity_t": remaining_capacity_t,
+                "diversion_rate": diversion_rate,
+                "collection_rate": collection_rate,
+                "landfill_life_years": landfill_life_years,
+                "circularity_gap": circularity_gap,
+                "effective_source_reduction": eff_source,
+                "effective_collection": eff_collection,
+                "effective_recycling": eff_recycling,
+                "effective_composting": eff_composting,
+                "organics_share": f_org,
+                "recoverables_share": f_rec,
+                **fraction_amounts,
+            }
+        )
+
+    return pd.DataFrame(records)
+
+
+def run_projection(inputs, start_year, end_year, scenario_name):
+    frames = [project_city(row, start_year, end_year, scenario_name) for _, row in inputs.iterrows()]
+    return pd.concat(frames, ignore_index=True)
+
+
+def compute_bau_reference(inputs, start_year, end_year):
+    return run_projection(inputs, start_year, end_year, "BAU")
+
+
+def priority_index(df_year):
+    d = df_year.copy()
+
+    def min_max(s):
+        s = pd.Series(s, dtype=float)
+        if s.max() == s.min():
+            return pd.Series(np.zeros(len(s)), index=s.index)
+        return (s - s.min()) / (s.max() - s.min())
+
+    d["n_per_capita"] = min_max(d["gpc_effective_kg_person_day"])
+    d["n_landfill_pressure"] = min_max(d["landfilled_t"] / d["remaining_capacity_t"].replace(0, np.nan).fillna(1))
+    d["n_collection_gap"] = min_max(1 - d["collection_rate"])
+    d["n_circularity_gap"] = min_max(d["circularity_gap"])
+    d["n_uncollected"] = min_max(d["uncollected_t"])
+
+    d["priority_score"] = 100 * (
+        0.25 * d["n_per_capita"]
+        + 0.25 * d["n_landfill_pressure"]
+        + 0.20 * d["n_circularity_gap"]
+        + 0.15 * d["n_collection_gap"]
+        + 0.15 * d["n_uncollected"]
+    )
+    d["priority_level"] = pd.cut(d["priority_score"], bins=[-0.01, 33, 66, 100], labels=["Low", "Medium", "High"])
+    return d.sort_values("priority_score", ascending=False)
+
+
+def build_alerts(row):
+    alerts = []
+    if row["landfill_life_years"] < 5:
+        alerts.append(("High", "Estimated landfill life is below 5 years."))
+    elif row["landfill_life_years"] < 10:
+        alerts.append(("Medium", "Estimated landfill life is below 10 years."))
+
+    if row["collection_rate"] < 0.85:
+        alerts.append(("High", "Collection rate is below 85%."))
+    elif row["collection_rate"] < 0.95:
+        alerts.append(("Medium", "Collection rate is below 95%."))
+
+    if row["diversion_rate"] < 0.20:
+        alerts.append(("High", "Diversion rate is below 20%."))
+    elif row["diversion_rate"] < 0.35:
+        alerts.append(("Medium", "Diversion rate remains moderate."))
+
+    if row["gpc_effective_kg_person_day"] > 1.1:
+        alerts.append(("Medium", "Per-capita waste generation is above 1.1 kg/person/day."))
+
+    if not alerts:
+        alerts.append(("Low", "No immediate structural alert under the selected scenario."))
+    return alerts
+
+
+def to_excel_download(df_dict):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, df in df_dict.items():
+            safe_name = sheet_name[:31]
+            df.to_excel(writer, sheet_name=safe_name, index=False)
+    return output.getvalue()
+
+# =========================================================
+# UI HEADER
+# =========================================================
+st.title("Urban Waste Simulation and Circularity Observatory")
+st.caption(
+    "Prospective software for population, waste generation, composition fractions, circularity scenarios and decision-support indicators."
+)
+
+# =========================================================
+# SIDEBAR INPUTS
+# =========================================================
+st.sidebar.header("Simulation settings")
+start_year = st.sidebar.number_input("Start year", min_value=2020, max_value=2050, value=2025, step=1)
+end_year = st.sidebar.number_input("End year", min_value=int(start_year) + 1, max_value=2100, value=2050, step=1)
+scenario_name = st.sidebar.selectbox("Scenario", list(SCENARIOS.keys()), index=0)
+
+st.sidebar.download_button(
+    "Download input template (.xlsx)",
+    data=input_template_to_excel(DEFAULT_INPUTS),
+    file_name="city_inputs_template.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
+
+uploaded = st.sidebar.file_uploader("Upload city inputs (.xlsx)", type=["xlsx"])
+
+if uploaded is not None:
+    try:
+        inputs = load_input_file(uploaded)
+        st.sidebar.success("Input file loaded successfully.")
+    except Exception as exc:
+        st.sidebar.error(f"Input file error: {exc}")
+        st.stop()
+else:
+    inputs = validate_inputs(DEFAULT_INPUTS)
+
+with st.expander("Edit input data", expanded=False):
+    st.write(
+        "Each row represents one city. The model uses current population, a future validation population, per-capita waste generation and composition fractions."
+    )
+    edited_inputs = st.data_editor(inputs, num_rows="dynamic", use_container_width=True)
+    try:
+        inputs = validate_inputs(edited_inputs)
+    except Exception as exc:
+        st.error(f"Input validation error: {exc}")
+        st.stop()
+
+# =========================================================
+# MODEL EXECUTION
+# =========================================================
+results = run_projection(inputs, int(start_year), int(end_year), scenario_name)
+bau = compute_bau_reference(inputs, int(start_year), int(end_year))
+
+comparison = results.merge(
+    bau[["city", "year", "landfilled_t", "diverted_t"]].rename(
+        columns={"landfilled_t": "landfilled_bau_t", "diverted_t": "diverted_bau_t"}
+    ),
+    on=["city", "year"],
+    how="left",
+)
+comparison["avoided_landfill_vs_bau_t"] = comparison["landfilled_bau_t"] - comparison["landfilled_t"]
+comparison["additional_diversion_vs_bau_t"] = comparison["diverted_t"] - comparison["diverted_bau_t"]
+
+cities = sorted(results["city"].unique())
+selected_city = st.sidebar.selectbox("City focus", cities, index=0)
+selected_year = st.sidebar.slider("Year focus", int(start_year), int(end_year), int(end_year))
+
+city_df = results[results["city"] == selected_city].copy()
+year_df = results[results["year"] == selected_year].copy()
+selected_row = results[(results["city"] == selected_city) & (results["year"] == selected_year)].iloc[0]
+comparison_city = comparison[comparison["city"] == selected_city].copy()
+
+# =========================================================
+# KPI CARDS
+# =========================================================
+st.subheader(f"Scenario: {scenario_name} — {SCENARIOS[scenario_name]['label']}")
+
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("City", selected_city)
+k2.metric("Population", human_format(selected_row["population"], 0))
+k3.metric("Generated", f"{human_format(selected_row['generated_t'], 0)} t/y")
+k4.metric("Diverted", f"{human_format(selected_row['diverted_t'], 0)} t/y")
+k5.metric("Diversion rate", f"{human_format(selected_row['diversion_rate'] * 100, 1)}%")
+
+# =========================================================
+# TABS
+# =========================================================
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+    [
+        "📈 Projections",
+        "♻️ Composition",
+        "🗺️ Geography",
+        "🧭 Circularity indicators",
+        "🚨 Alerts & priority",
+        "📐 Methodology",
+        "⬇️ Export",
+    ]
+)
+
+with tab1:
+    st.markdown("### Population and waste projections")
+    c1, c2 = st.columns(2)
+    with c1:
+        fig_pop = px.line(
+            city_df,
+            x="year",
+            y="population",
+            markers=True,
+            template=PLOT_TEMPLATE,
+            title=f"Population projection — {selected_city}",
+            labels={"year": "Year", "population": "Population"},
+        )
+        st.plotly_chart(fig_pop, use_container_width=True)
+    with c2:
+        fig_waste = px.line(
+            city_df,
+            x="year",
+            y=["generated_t", "collected_t", "landfilled_t", "diverted_t"],
+            markers=True,
+            template=PLOT_TEMPLATE,
+            title=f"Waste flow projection — {selected_city}",
+            labels={"year": "Year", "value": "tons/year", "variable": "Flow"},
+        )
+        st.plotly_chart(fig_waste, use_container_width=True)
+
+    fig_compare = px.line(
+        results,
+        x="year",
+        y="generated_t",
+        color="city",
+        template=PLOT_TEMPLATE,
+        title="Generated waste by city",
+        labels={"year": "Year", "generated_t": "tons/year", "city": "City"},
+    )
+    st.plotly_chart(fig_compare, use_container_width=True)
+
+with tab2:
+    st.markdown("### Waste composition by projected fraction")
+    fraction_cols_t = [c.replace("_pct", "_t") for c in FRACTION_COLUMNS]
+    fraction_labels = {
+        "organics_t": "Organics",
+        "plastics_t": "Plastics",
+        "paper_cardboard_t": "Paper and cardboard",
+        "glass_t": "Glass",
+        "metals_t": "Metals",
+        "textiles_t": "Textiles",
+        "others_t": "Others",
     }
-    .stDataFrame div {
-        white-space: nowrap;
-    }
-</style>
-""", unsafe_allow_html=True)
+    comp_row = selected_row[fraction_cols_t].rename(index=fraction_labels).reset_index()
+    comp_row.columns = ["fraction", "tons_year"]
 
-st.title("📈 Simulador de Proyección de Población")
-st.write("Simule el crecimiento poblacional de múltiples municipios, compare métodos y, si desea, explore escenarios con tasas variables.")
+    c1, c2 = st.columns(2)
+    with c1:
+        fig_comp = px.pie(
+            comp_row,
+            names="fraction",
+            values="tons_year",
+            hole=0.45,
+            template=PLOT_TEMPLATE,
+            title=f"Composition — {selected_city}, {selected_year}",
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+    with c2:
+        fig_comp_bar = px.bar(
+            comp_row.sort_values("tons_year", ascending=False),
+            x="fraction",
+            y="tons_year",
+            text_auto=".2s",
+            template=PLOT_TEMPLATE,
+            title="Composition in tons/year",
+            labels={"fraction": "Fraction", "tons_year": "tons/year"},
+        )
+        st.plotly_chart(fig_comp_bar, use_container_width=True)
 
-# Control de escenarios
-activar_escenario = st.checkbox("¿Desea activar simulación de escenarios por tramos?", value=False)
-escenario_info = "Si activa esta opción, podrá definir diferentes tasas de crecimiento para dos periodos: 0 a la mitad del horizonte, y de la mitad al final."
+with tab3:
+    st.markdown("### Geographic view")
+    geo_df = year_df.copy()
+    geo_df["lat"] = geo_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[0])
+    geo_df["lon"] = geo_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[1])
+    geo_df = geo_df.dropna(subset=["lat", "lon"])
 
-# Entradas generales
-col1, col2 = st.columns([1, 2])
-with col1:
-    num_municipios = st.number_input("Número de municipios", min_value=1, max_value=5, value=2)
-with col2:
-    t_horizonte = st.slider("Horizonte de proyección (años)", min_value=5, max_value=50, value=20)
+    if geo_df.empty:
+        st.info("No coordinates are available for the selected cities.")
+    else:
+        fig_map = px.scatter_mapbox(
+            geo_df,
+            lat="lat",
+            lon="lon",
+            size="generated_t",
+            color="diversion_rate",
+            hover_name="city",
+            hover_data={
+                "generated_t": ":,.0f",
+                "landfilled_t": ":,.0f",
+                "diverted_t": ":,.0f",
+                "gpc_effective_kg_person_day": ":.2f",
+                "lat": False,
+                "lon": False,
+            },
+            mapbox_style="open-street-map",
+            zoom=4.8,
+            center={"lat": 6.5, "lon": -74.5},
+            template=PLOT_TEMPLATE,
+            title=f"Generated waste and diversion rate — {selected_year}",
+        )
+        fig_map.update_layout(margin=dict(l=0, r=0, t=50, b=0))
+        st.plotly_chart(fig_map, use_container_width=True)
 
-t = np.arange(0, t_horizonte + 1)
+with tab4:
+    st.markdown("### Circularity indicators")
+    c1, c2 = st.columns(2)
+    with c1:
+        fig_div = px.line(
+            city_df,
+            x="year",
+            y="diversion_rate",
+            markers=True,
+            template=PLOT_TEMPLATE,
+            title=f"Diversion rate — {selected_city}",
+            labels={"year": "Year", "diversion_rate": "Diversion rate"},
+        )
+        fig_div.update_yaxes(tickformat=".0%")
+        st.plotly_chart(fig_div, use_container_width=True)
+    with c2:
+        fig_gap = px.line(
+            city_df,
+            x="year",
+            y="circularity_gap",
+            markers=True,
+            template=PLOT_TEMPLATE,
+            title=f"Circularity gap — {selected_city}",
+            labels={"year": "Year", "circularity_gap": "Circularity gap"},
+        )
+        fig_gap.update_yaxes(tickformat=".0%")
+        st.plotly_chart(fig_gap, use_container_width=True)
 
-# Cálculo y visualización
-fig, ax = plt.subplots(figsize=(10, 5))
-df_total = pd.DataFrame()
+    fig_avoid = px.bar(
+        comparison[comparison["year"] == selected_year].sort_values("avoided_landfill_vs_bau_t", ascending=False),
+        x="city",
+        y="avoided_landfill_vs_bau_t",
+        template=PLOT_TEMPLATE,
+        title=f"Avoided landfill compared with BAU — {selected_year}",
+        labels={"city": "City", "avoided_landfill_vs_bau_t": "tons/year"},
+    )
+    fig_avoid.update_layout(xaxis_tickangle=-25)
+    st.plotly_chart(fig_avoid, use_container_width=True)
 
-# Procesar cada municipio
-for i in range(num_municipios):
-    with st.expander(f"📍 Municipio {i+1}", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            nombre = st.text_input(f"Nombre del municipio", f"Municipio_{i+1}", key=f"nombre_{i}")
-            P0 = st.number_input("Población inicial", min_value=1000, value=100000, key=f"P0_{i}")
-        with col2:
-            metodos = st.multiselect("Métodos de proyección", ["Aritmético", "Geométrico", "Exponencial", "Wappaus"], default=["Aritmético", "Geométrico"], key=f"metodo_{i}")
-
-        if activar_escenario:
-            col1, col2 = st.columns(2)
-            with col1:
-                tasa1 = st.number_input("Tasa (%) para los primeros años", value=3.0, step=0.1, key=f"tasa1_{i}") / 100
-            with col2:
-                tasa2 = st.number_input("Tasa (%) para los años finales", value=1.5, step=0.1, key=f"tasa2_{i}") / 100
-            t_split = t_horizonte // 2
+with tab5:
+    st.markdown("### Alerts and priority ranking")
+    st.markdown(f"#### Alerts for {selected_city} in {selected_year}")
+    for severity, message in build_alerts(selected_row):
+        if severity == "High":
+            st.error(f"{severity} · {message}")
+        elif severity == "Medium":
+            st.warning(f"{severity} · {message}")
         else:
-            tasa = st.number_input("Tasa de crecimiento anual (%)", min_value=0.0, value=2.5, step=0.1, key=f"tasa_{i}") / 100
+            st.success(f"{severity} · {message}")
 
-        # Inicializar DataFrame por municipio
-        resultados = pd.DataFrame({"Año": t})
+    ranking = priority_index(year_df)
+    fig_priority = px.bar(
+        ranking,
+        x="city",
+        y="priority_score",
+        color="priority_level",
+        template=PLOT_TEMPLATE,
+        title=f"Priority index — {selected_year}",
+        labels={"city": "City", "priority_score": "Priority score"},
+    )
+    fig_priority.update_layout(xaxis_tickangle=-25)
+    st.plotly_chart(fig_priority, use_container_width=True)
 
-        # Cálculos por método
-        for metodo in metodos:
-            if activar_escenario:
-                tasa_segmentada = np.concatenate([
-                    np.full(t_split + 1, tasa1),
-                    np.full(t_horizonte - t_split, tasa2)
-                ])
-                if metodo == "Aritmético":
-                    incremento = P0 * tasa_segmentada
-                    P = P0 + np.cumsum(incremento)
-                elif metodo == "Geométrico":
-                    P = [P0]
-                    for i in range(1, len(t)):
-                        P.append(P[i-1] * (1 + tasa_segmentada[i]))
-                elif metodo == "Exponencial":
-                    P = P0 * np.exp(np.cumsum(tasa_segmentada))
-                elif metodo == "Wappaus":
-                    Pn = P0 * (1 + np.mean(tasa_segmentada))**t_horizonte
-                    P = P0 + ((Pn - P0)/t_horizonte) * t + ((Pn - P0)/(2 * t_horizonte**2)) * t**2
-                P = np.array(P)
-            else:
-                if metodo == "Aritmético":
-                    incremento = P0 * tasa
-                    P = P0 + incremento * t
-                elif metodo == "Geométrico":
-                    P = P0 * (1 + tasa)**t
-                elif metodo == "Exponencial":
-                    P = P0 * np.exp(tasa * t)
-                elif metodo == "Wappaus":
-                    Pn = P0 * (1 + tasa)**t_horizonte
-                    P = P0 + ((Pn - P0)/t_horizonte) * t + ((Pn - P0)/(2 * t_horizonte**2)) * t**2
+    st.dataframe(
+        ranking[[
+            "city",
+            "priority_score",
+            "priority_level",
+            "gpc_effective_kg_person_day",
+            "collection_rate",
+            "diversion_rate",
+            "landfilled_t",
+            "remaining_capacity_t",
+        ]].style.format({
+            "priority_score": "{:,.1f}",
+            "gpc_effective_kg_person_day": "{:,.2f}",
+            "collection_rate": "{:,.1%}",
+            "diversion_rate": "{:,.1%}",
+            "landfilled_t": "{:,.0f}",
+            "remaining_capacity_t": "{:,.0f}",
+        }),
+        use_container_width=True,
+    )
 
-            resultados[metodo] = P.astype(int)
-            ax.plot(t, P, label=f"{nombre} - {metodo}")
-            df_temp = pd.DataFrame({
-                "Municipio": nombre,
-                "Método": metodo,
-                "Año": t,
-                "Población proyectada": P.astype(int)
-            })
-            df_total = pd.concat([df_total, df_temp], ignore_index=True)
+with tab6:
+    st.markdown("### Methodology and equations")
+    st.markdown(
+        r"""
+The software implements a discrete dynamic model with annual time steps. For each city, population is projected from a base population and a future validation population:
 
-        # Mostrar tabla individual
-        st.markdown(f"### 📊 Tabla de resultados para {nombre}")
-        st.dataframe(resultados)
+\[
+r_p = \left(\frac{P_T}{P_0}\right)^{\frac{1}{T-t_0}} - 1
+\]
 
-# Mostrar gráfico y tabla completa
-st.subheader("📈 Comparación gráfica entre municipios y métodos")
-ax.set_xlabel("Años")
-ax.set_ylabel("Población")
-ax.grid(True)
-ax.legend()
-st.pyplot(fig)
+\[
+P_t = P_0(1+r_p)^{t-t_0}
+\]
 
-st.subheader("📋 Tabla consolidada de todos los municipios")
-st.dataframe(df_total)
+Per-capita waste generation evolves according to an annual growth parameter and is adjusted by effective source reduction:
 
-# Botón de descarga
-csv = df_total.to_csv(index=False).encode('utf-8')
-st.download_button("📥 Descargar tabla completa en Excel (CSV)", data=csv, file_name="proyeccion_comparada.csv", mime="text/csv")
+\[
+g_t = g_0(1+r_g)^{t-t_0}(1-S_{eff,t})
+\]
+
+Annual municipal solid waste generation is estimated as:
+
+\[
+W_t = \frac{P_t g_t 365}{1000}
+\]
+
+Collected and uncollected waste are calculated as:
+
+\[
+Q_t = W_t K_{eff,t}
+\]
+
+\[
+U_t = W_t - Q_t
+\]
+
+Recycling and composting are estimated from recoverable and organic fractions:
+
+\[
+Rec_t = \min(Q_t, W_t f_{rec}R_{eff,t})
+\]
+
+\[
+Comp_t = \min(Q_t-Rec_t, W_t f_{org}C_{eff,t})
+\]
+
+Diverted and landfilled waste are calculated as:
+
+\[
+Div_t = Rec_t + Comp_t
+\]
+
+\[
+D_t = \max(0, Q_t - Div_t)
+\]
+
+The main indicators are diversion rate, circularity gap, cumulative landfilled waste and estimated remaining landfill life.
+        """
+    )
+
+with tab7:
+    st.markdown("### Export results")
+    st.download_button(
+        "Download simulation results (.xlsx)",
+        data=to_excel_download({"inputs": inputs, "results": results, "bau_comparison": comparison}),
+        file_name=f"urban_waste_circularity_results_{scenario_name.replace(' ', '_')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    st.download_button(
+        "Download simulation results (.csv)",
+        data=results.to_csv(index=False).encode("utf-8"),
+        file_name=f"urban_waste_circularity_results_{scenario_name.replace(' ', '_')}.csv",
+        mime="text/csv",
+    )
+
+    with st.expander("Preview results"):
+        st.dataframe(results, use_container_width=True)
