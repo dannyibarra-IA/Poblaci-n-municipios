@@ -78,6 +78,15 @@ DEFAULT_INPUTS = pd.DataFrame(
 )
 
 SCENARIOS = {
+    "Critical Stress": {
+        "source_reduction_target": 0.00,
+        "collection_target": 0.78,
+        "recycling_target": 0.10,
+        "composting_target": 0.04,
+        "education_bonus_target": 0.00,
+        "formalization_bonus_target": 0.00,
+        "label": "Critical stress scenario",
+    },
     "BAU": {
         "source_reduction_target": 0.00,
         "collection_target": 0.85,
@@ -104,6 +113,15 @@ SCENARIOS = {
         "education_bonus_target": 0.06,
         "formalization_bonus_target": 0.08,
         "label": "High circularity push",
+    },
+    "Optimistic Transition": {
+        "source_reduction_target": 0.18,
+        "collection_target": 0.98,
+        "recycling_target": 0.55,
+        "composting_target": 0.40,
+        "education_bonus_target": 0.10,
+        "formalization_bonus_target": 0.12,
+        "label": "Optimistic circular transition",
     },
 }
 
@@ -504,7 +522,26 @@ st.markdown(
 st.sidebar.header("Simulation settings")
 start_year = st.sidebar.number_input("Start year", min_value=2020, max_value=2050, value=2025, step=1)
 end_year = st.sidebar.number_input("End year", min_value=int(start_year) + 1, max_value=2100, value=2050, step=1)
-scenario_name = st.sidebar.selectbox("Scenario", list(SCENARIOS.keys()), index=0)
+
+if "active_scenario" not in st.session_state:
+    st.session_state["active_scenario"] = "BAU"
+
+st.sidebar.markdown("#### Quick scenario buttons")
+qb1, qb2, qb3 = st.sidebar.columns(3)
+with qb1:
+    if st.button("BAU", use_container_width=True):
+        st.session_state["active_scenario"] = "BAU"
+with qb2:
+    if st.button("Critical", use_container_width=True):
+        st.session_state["active_scenario"] = "Critical Stress"
+with qb3:
+    if st.button("Optimistic", use_container_width=True):
+        st.session_state["active_scenario"] = "Optimistic Transition"
+
+scenario_keys = list(SCENARIOS.keys())
+scenario_index = scenario_keys.index(st.session_state["active_scenario"]) if st.session_state["active_scenario"] in scenario_keys else scenario_keys.index("BAU")
+scenario_name = st.sidebar.selectbox("Scenario", scenario_keys, index=scenario_index)
+st.session_state["active_scenario"] = scenario_name
 comparison_scenarios = st.sidebar.multiselect(
     "Scenarios to compare",
     list(SCENARIOS.keys()),
@@ -582,6 +619,12 @@ comparison_selected_row = comparison_city[comparison_city["year"] == selected_ye
 # KPI CARDS
 # =========================================================
 st.subheader(f"Scenario: {scenario_name} — {SCENARIOS[scenario_name]['label']}")
+if scenario_name == "Critical Stress":
+    st.warning("Critical Stress represents a conservative or worst-case trajectory with lower collection, recycling and composting performance. It is useful for stress-testing landfill pressure and operational risk.")
+elif scenario_name == "Optimistic Transition":
+    st.success("Optimistic Transition represents an ambitious circularity pathway with stronger source reduction, recycling, composting, education and recycler formalization.")
+elif scenario_name == "BAU":
+    st.info("BAU is the reference trajectory used to estimate avoided landfill disposal and additional diversion under alternative scenarios.")
 
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 k1.metric("City", selected_city)
@@ -653,6 +696,34 @@ with tab1:
     )
     st.plotly_chart(fig_compare, use_container_width=True)
 
+    st.markdown("### Animated simulation")
+    st.info(
+        "Use the Play button in the animation control to observe how population, generation and landfill pressure evolve year by year across cities. This turns the projection into an exploratory simulation rather than a static dashboard."
+    )
+    animation_df = results.copy()
+    animation_df["landfilled_size"] = animation_df["landfilled_t"].clip(lower=1)
+    fig_animation = px.scatter(
+        animation_df,
+        x="population",
+        y="generated_t",
+        animation_frame="year",
+        animation_group="city",
+        size="landfilled_size",
+        color="city",
+        hover_name="city",
+        template=PLOT_TEMPLATE,
+        title="Animated population-waste-landfill trajectory by city",
+        labels={
+            "population": "Population",
+            "generated_t": "Generated waste (tons/year)",
+            "landfilled_size": "Landfilled waste",
+            "year": "Year",
+        },
+        size_max=45,
+    )
+    fig_animation.update_layout(transition={"duration": 400}, margin=dict(l=10, r=10, t=60, b=10))
+    st.plotly_chart(fig_animation, use_container_width=True)
+
 with tab2:
     st.markdown("### Waste composition by projected fraction")
     fraction_cols_t = [c.replace("_pct", "_t") for c in FRACTION_COLUMNS]
@@ -693,6 +764,9 @@ with tab2:
 
 with tab3:
     st.markdown("### Geographic view: generation size and risk color")
+    st.info(
+        "The geographic view combines two readings: bubble size represents the magnitude of municipal solid waste generation, while color represents operational risk. Risk is classified as High, Medium or Low according to landfill life, diversion rate, collection rate and per-capita waste generation. A High-risk city is not necessarily the largest generator; it is a city where the system shows greater stress or lower circularity capacity under the selected scenario."
+    )
     geo_df = year_df.copy()
     geo_df["lat"] = geo_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[0])
     geo_df["lon"] = geo_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[1])
@@ -731,6 +805,9 @@ with tab3:
 
 with tab4:
     st.markdown("### Circularity indicators")
+    st.info(
+        "This section translates the simulation into decision-support indicators. The diversion rate shows the share of generated waste that is recovered through recycling or composting. The circularity gap represents the remaining fraction that is not diverted. Avoided landfill compares the selected scenario against BAU, while cumulative avoided landfill shows the total pressure removed from final disposal over time. These indicators help interpret whether a city is only managing waste or actually moving toward circularity."
+    )
     c1, c2 = st.columns(2)
     with c1:
         fig_div = px.line(
