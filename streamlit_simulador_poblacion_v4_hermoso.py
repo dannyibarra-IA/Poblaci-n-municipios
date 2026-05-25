@@ -186,8 +186,11 @@ def effective_policy_params(source_reduction, collection, recycling, composting,
     return eff_source, eff_collection, eff_recycling, eff_composting
 
 
-def project_city(row, start_year, end_year, scenario_name):
-    scenario = SCENARIOS[scenario_name]
+def project_city(row, start_year, end_year, scenario_name, overrides=None):
+    scenario = SCENARIOS[scenario_name].copy()
+    if overrides:
+        scenario.update(overrides)
+
     base_year = int(row["base_year"])
     validation_year = int(row["validation_year"])
     p0 = float(row["population_base"])
@@ -280,13 +283,50 @@ def project_city(row, start_year, end_year, scenario_name):
     return pd.DataFrame(records)
 
 
-def run_projection(inputs, start_year, end_year, scenario_name):
-    frames = [project_city(row, start_year, end_year, scenario_name) for _, row in inputs.iterrows()]
+def run_projection(inputs, start_year, end_year, scenario_name, overrides=None):
+    frames = [project_city(row, start_year, end_year, scenario_name, overrides=overrides) for _, row in inputs.iterrows()]
     return pd.concat(frames, ignore_index=True)
 
 
 def compute_bau_reference(inputs, start_year, end_year):
     return run_projection(inputs, start_year, end_year, "BAU")
+
+
+def classify_risk(row):
+    score = 0
+    if row["landfill_life_years"] < 5:
+        score += 3
+    elif row["landfill_life_years"] < 10:
+        score += 2
+    elif row["landfill_life_years"] < 20:
+        score += 1
+
+    if row["diversion_rate"] < 0.20:
+        score += 2
+    elif row["diversion_rate"] < 0.35:
+        score += 1
+
+    if row["collection_rate"] < 0.85:
+        score += 2
+    elif row["collection_rate"] < 0.95:
+        score += 1
+
+    if row["gpc_effective_kg_person_day"] > 1.1:
+        score += 1
+
+    if score >= 5:
+        return "High"
+    if score >= 3:
+        return "Medium"
+    return "Low"
+
+
+def circularity_light(row):
+    if row["diversion_rate"] >= 0.45 and row["landfill_life_years"] >= 15 and row["collection_rate"] >= 0.95:
+        return "Green"
+    if row["diversion_rate"] >= 0.25 and row["landfill_life_years"] >= 8 and row["collection_rate"] >= 0.85:
+        return "Yellow"
+    return "Red"
 
 
 def priority_index(df_year):
@@ -298,8 +338,9 @@ def priority_index(df_year):
             return pd.Series(np.zeros(len(s)), index=s.index)
         return (s - s.min()) / (s.max() - s.min())
 
+    landfill_pressure = d["landfilled_t"] / d["remaining_capacity_t"].replace(0, np.nan).fillna(1)
     d["n_per_capita"] = min_max(d["gpc_effective_kg_person_day"])
-    d["n_landfill_pressure"] = min_max(d["landfilled_t"] / d["remaining_capacity_t"].replace(0, np.nan).fillna(1))
+    d["n_landfill_pressure"] = min_max(landfill_pressure)
     d["n_collection_gap"] = min_max(1 - d["collection_rate"])
     d["n_circularity_gap"] = min_max(d["circularity_gap"])
     d["n_uncollected"] = min_max(d["uncollected_t"])
@@ -348,12 +389,113 @@ def to_excel_download(df_dict):
             df.to_excel(writer, sheet_name=safe_name, index=False)
     return output.getvalue()
 
+
+def make_sankey(row):
+    labels = ["Generated", "Collected", "Uncollected", "Recycled", "Composted", "Landfilled"]
+    source = [0, 0, 1, 1, 1]
+    target = [1, 2, 3, 4, 5]
+    values = [row["collected_t"], row["uncollected_t"], row["recycled_t"], row["composted_t"], row["landfilled_t"]]
+    fig = go.Figure(
+        data=[
+            go.Sankey(
+                node=dict(label=labels, pad=18, thickness=18),
+                link=dict(source=source, target=target, value=values),
+            )
+        ]
+    )
+    fig.update_layout(title_text="Waste flow balance", template=PLOT_TEMPLATE, height=430)
+    return fig
+
+
+def sensitivity_analysis(inputs, selected_city, start_year, end_year, scenario_name, baseline_results, selected_year):
+    baseline_row = baseline_results[(baseline_results["city"] == selected_city) & (baseline_results["year"] == selected_year)].iloc[0]
+    baseline_landfilled = baseline_row["landfilled_t"]
+    baseline_diversion = baseline_row["diversion_rate"]
+
+    tests = [
+        ("Source reduction +5 pp", {"source_reduction_target": min(0.35, SCENARIOS[scenario_name]["source_reduction_target"] + 0.05)}),
+        ("Collection +5 pp", {"collection_target": min(0.99, SCENARIOS[scenario_name]["collection_target"] + 0.05)}),
+        ("Recycling +5 pp", {"recycling_target": min(0.95, SCENARIOS[scenario_name]["recycling_target"] + 0.05)}),
+        ("Composting +5 pp", {"composting_target": min(0.90, SCENARIOS[scenario_name]["composting_target"] + 0.05)}),
+        ("Education +5 pp", {"education_bonus_target": min(0.15, SCENARIOS[scenario_name]["education_bonus_target"] + 0.05)}),
+        ("Formalization +5 pp", {"formalization_bonus_target": min(0.15, SCENARIOS[scenario_name]["formalization_bonus_target"] + 0.05)}),
+    ]
+
+    rows = []
+    for label, override in tests:
+        alt = run_projection(inputs, start_year, end_year, scenario_name, overrides=override)
+        alt_row = alt[(alt["city"] == selected_city) & (alt["year"] == selected_year)].iloc[0]
+        rows.append(
+            {
+                "lever": label,
+                "landfilled_reduction_t": baseline_landfilled - alt_row["landfilled_t"],
+                "diversion_rate_change_pp": (alt_row["diversion_rate"] - baseline_diversion) * 100,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("landfilled_reduction_t", ascending=False)
+
 # =========================================================
 # UI HEADER
 # =========================================================
-st.title("Urban Waste Simulation and Circularity Observatory")
-st.caption(
-    "Prospective software for population, waste generation, composition fractions, circularity scenarios and decision-support indicators."
+st.markdown(
+    """
+    <style>
+        .hero-box {
+            background: linear-gradient(135deg, rgba(13,92,145,0.11), rgba(47,125,107,0.10), rgba(185,137,0,0.08));
+            border: 1px solid rgba(20, 50, 74, 0.10);
+            border-radius: 24px;
+            padding: 1.5rem 1.6rem 1.25rem 1.6rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 6px 24px rgba(20, 50, 74, 0.08);
+        }
+        .hero-kicker {
+            display: inline-block;
+            font-size: 0.78rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: #0d5c91;
+            background: rgba(255,255,255,0.78);
+            border: 1px solid rgba(13,92,145,0.12);
+            border-radius: 999px;
+            padding: 0.35rem 0.7rem;
+            margin-bottom: 0.75rem;
+        }
+        .hero-title {
+            font-size: 2.15rem;
+            line-height: 1.1;
+            font-weight: 850;
+            color: #14324a;
+            margin-bottom: 0.5rem;
+        }
+        .hero-subtitle {
+            color: #375268;
+            font-size: 1.02rem;
+            max-width: 1080px;
+            line-height: 1.55;
+            margin-bottom: 0.65rem;
+        }
+        .hero-meta {
+            color: #5a6c7d;
+            font-size: 0.92rem;
+        }
+    </style>
+
+    <div class="hero-box">
+        <div class="hero-kicker">Academic decision-support platform</div>
+        <div class="hero-title">Urban Waste Simulation and Circularity Observatory</div>
+        <div class="hero-subtitle">
+            Prospective software for Colombian cities that projects population, municipal solid waste generation,
+            waste composition and circularity trajectories from minimum input data. The platform integrates annual
+            simulation, scenario comparison, landfill stress indicators, sensitivity analysis and decision-support metrics
+            for urban environmental planning.
+        </div>
+        <div class="hero-meta">
+            Developed by <b>Danny Ibarra Vega, Ph.D.</b> · Universidad de Antioquia · Waste systems, circular economy and dynamic simulation
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 # =========================================================
@@ -420,6 +562,8 @@ comparison = results.merge(
 )
 comparison["avoided_landfill_vs_bau_t"] = comparison["landfilled_bau_t"] - comparison["landfilled_t"]
 comparison["additional_diversion_vs_bau_t"] = comparison["diverted_t"] - comparison["diverted_bau_t"]
+comparison["cumulative_avoided_landfill_vs_bau_t"] = comparison.groupby("city")["avoided_landfill_vs_bau_t"].cumsum()
+comparison["cumulative_additional_diversion_vs_bau_t"] = comparison.groupby("city")["additional_diversion_vs_bau_t"].cumsum()
 
 cities = sorted(results["city"].unique())
 selected_city = st.sidebar.selectbox("City focus", cities, index=0)
@@ -427,8 +571,12 @@ selected_year = st.sidebar.slider("Year focus", int(start_year), int(end_year), 
 
 city_df = results[results["city"] == selected_city].copy()
 year_df = results[results["year"] == selected_year].copy()
+year_df["risk_level"] = year_df.apply(classify_risk, axis=1)
+year_df["circularity_light"] = year_df.apply(circularity_light, axis=1)
 selected_row = results[(results["city"] == selected_city) & (results["year"] == selected_year)].iloc[0]
+selected_light = circularity_light(selected_row)
 comparison_city = comparison[comparison["city"] == selected_city].copy()
+comparison_selected_row = comparison_city[comparison_city["year"] == selected_year].iloc[0]
 
 # =========================================================
 # KPI CARDS
@@ -445,16 +593,23 @@ collapse_years = selected_row["landfill_life_years"]
 collapse_text = "∞" if np.isinf(collapse_years) else f"{human_format(collapse_years, 1)} years"
 k6.metric("Years to landfill collapse", collapse_text)
 
+m1, m2, m3 = st.columns(3)
+m1.metric("Cumulative avoided landfill vs BAU", f"{human_format(comparison_selected_row['cumulative_avoided_landfill_vs_bau_t'], 0)} t")
+m2.metric("Additional diversion vs BAU", f"{human_format(comparison_selected_row['additional_diversion_vs_bau_t'], 0)} t/y")
+m3.metric("Circularity traffic light", selected_light)
+
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs(
     [
         "📈 Projections",
         "♻️ Composition",
         "🗺️ Geography",
         "🧭 Circularity indicators",
         "🔁 Scenario comparison",
+        "🌊 Flow Sankey",
+        "🧪 Sensitivity",
         "🚨 Alerts & priority",
         "📐 Methodology",
         "⬇️ Export",
@@ -537,7 +692,7 @@ with tab2:
         st.plotly_chart(fig_comp_bar, use_container_width=True)
 
 with tab3:
-    st.markdown("### Geographic view")
+    st.markdown("### Geographic view: generation size and risk color")
     geo_df = year_df.copy()
     geo_df["lat"] = geo_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[0])
     geo_df["lon"] = geo_df["city"].map(lambda c: CITY_COORDS.get(c, (np.nan, np.nan))[1])
@@ -551,12 +706,16 @@ with tab3:
             lat="lat",
             lon="lon",
             size="generated_t",
-            color="diversion_rate",
+            color="risk_level",
+            color_discrete_map={"Low": "green", "Medium": "orange", "High": "red"},
             hover_name="city",
             hover_data={
                 "generated_t": ":,.0f",
                 "landfilled_t": ":,.0f",
                 "diverted_t": ":,.0f",
+                "diversion_rate": ":.1%",
+                "landfill_life_years": ":.1f",
+                "circularity_light": True,
                 "gpc_effective_kg_person_day": ":.2f",
                 "lat": False,
                 "lon": False,
@@ -565,7 +724,7 @@ with tab3:
             zoom=4.8,
             center={"lat": 6.5, "lon": -74.5},
             template=PLOT_TEMPLATE,
-            title=f"Generated waste and diversion rate — {selected_year}",
+            title=f"Generated waste size and operational risk — {selected_year}",
         )
         fig_map.update_layout(margin=dict(l=0, r=0, t=50, b=0))
         st.plotly_chart(fig_map, use_container_width=True)
@@ -598,16 +757,29 @@ with tab4:
         fig_gap.update_yaxes(tickformat=".0%")
         st.plotly_chart(fig_gap, use_container_width=True)
 
-    fig_avoid = px.bar(
-        comparison[comparison["year"] == selected_year].sort_values("avoided_landfill_vs_bau_t", ascending=False),
-        x="city",
-        y="avoided_landfill_vs_bau_t",
-        template=PLOT_TEMPLATE,
-        title=f"Avoided landfill compared with BAU — {selected_year}",
-        labels={"city": "City", "avoided_landfill_vs_bau_t": "tons/year"},
-    )
-    fig_avoid.update_layout(xaxis_tickangle=-25)
-    st.plotly_chart(fig_avoid, use_container_width=True)
+    c3, c4 = st.columns(2)
+    with c3:
+        fig_avoid = px.bar(
+            comparison[comparison["year"] == selected_year].sort_values("avoided_landfill_vs_bau_t", ascending=False),
+            x="city",
+            y="avoided_landfill_vs_bau_t",
+            template=PLOT_TEMPLATE,
+            title=f"Avoided landfill compared with BAU — {selected_year}",
+            labels={"city": "City", "avoided_landfill_vs_bau_t": "tons/year"},
+        )
+        fig_avoid.update_layout(xaxis_tickangle=-25)
+        st.plotly_chart(fig_avoid, use_container_width=True)
+    with c4:
+        fig_cum_avoid = px.line(
+            comparison_city,
+            x="year",
+            y="cumulative_avoided_landfill_vs_bau_t",
+            markers=True,
+            template=PLOT_TEMPLATE,
+            title=f"Cumulative avoided landfill vs BAU — {selected_city}",
+            labels={"year": "Year", "cumulative_avoided_landfill_vs_bau_t": "tons"},
+        )
+        st.plotly_chart(fig_cum_avoid, use_container_width=True)
 
 with tab5:
     st.markdown("### Side-by-side scenario comparison")
@@ -688,6 +860,41 @@ with tab5:
         st.plotly_chart(fig_trend_compare, use_container_width=True)
 
 with tab6:
+    st.markdown("### Sankey flow diagram")
+    st.plotly_chart(make_sankey(selected_row), use_container_width=True)
+
+with tab7:
+    st.markdown("### Sensitivity analysis")
+    st.write("Each test increases one policy lever by 5 percentage points and estimates the effect on landfilled waste and diversion rate.")
+    sens = sensitivity_analysis(inputs, selected_city, int(start_year), int(end_year), scenario_name, results, selected_year)
+    c1, c2 = st.columns(2)
+    with c1:
+        fig_sens_landfill = px.bar(
+            sens,
+            x="lever",
+            y="landfilled_reduction_t",
+            template=PLOT_TEMPLATE,
+            title=f"Landfilled waste reduction sensitivity — {selected_city}, {selected_year}",
+            labels={"lever": "Policy lever", "landfilled_reduction_t": "tons/year"},
+            text_auto=".2s",
+        )
+        fig_sens_landfill.update_layout(xaxis_tickangle=-25)
+        st.plotly_chart(fig_sens_landfill, use_container_width=True)
+    with c2:
+        fig_sens_div = px.bar(
+            sens,
+            x="lever",
+            y="diversion_rate_change_pp",
+            template=PLOT_TEMPLATE,
+            title=f"Diversion rate sensitivity — {selected_city}, {selected_year}",
+            labels={"lever": "Policy lever", "diversion_rate_change_pp": "percentage points"},
+            text_auto=".2f",
+        )
+        fig_sens_div.update_layout(xaxis_tickangle=-25)
+        st.plotly_chart(fig_sens_div, use_container_width=True)
+    st.dataframe(sens.style.format({"landfilled_reduction_t": "{:,.0f}", "diversion_rate_change_pp": "{:,.2f}"}), use_container_width=True)
+
+with tab8:
     st.markdown("### Alerts and priority ranking")
     st.markdown(f"#### Alerts for {selected_city} in {selected_year}")
     for severity, message in build_alerts(selected_row):
@@ -699,6 +906,8 @@ with tab6:
             st.success(f"{severity} · {message}")
 
     ranking = priority_index(year_df)
+    ranking["risk_level"] = ranking.apply(classify_risk, axis=1)
+    ranking["circularity_light"] = ranking.apply(circularity_light, axis=1)
     fig_priority = px.bar(
         ranking,
         x="city",
@@ -716,6 +925,8 @@ with tab6:
             "city",
             "priority_score",
             "priority_level",
+            "risk_level",
+            "circularity_light",
             "gpc_effective_kg_person_day",
             "collection_rate",
             "diversion_rate",
@@ -732,7 +943,7 @@ with tab6:
         use_container_width=True,
     )
 
-with tab7:
+with tab9:
     st.markdown("### Methodology and equations")
     st.write("The software implements a discrete dynamic model with annual time steps.")
 
@@ -762,13 +973,13 @@ with tab7:
     st.latex("Cap_t = max(0, Cap_0 - sum(D_i))")
     st.latex("YTC_t = Cap_t / D_t")
 
-    st.write("The main indicators are diversion rate, circularity gap, cumulative landfilled waste, remaining landfill capacity and estimated years to landfill collapse.")
+    st.write("The main indicators are diversion rate, circularity gap, cumulative landfilled waste, remaining landfill capacity, sensitivity response, priority level and estimated years to landfill collapse.")
 
-with tab8:
+with tab10:
     st.markdown("### Export results")
     st.download_button(
         "Download simulation results (.xlsx)",
-        data=to_excel_download({"inputs": inputs, "results": results, "bau_comparison": comparison}),
+        data=to_excel_download({"inputs": inputs, "results": results, "bau_comparison": comparison, "scenario_comparison": scenario_results}),
         file_name=f"urban_waste_circularity_results_{scenario_name.replace(' ', '_')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
