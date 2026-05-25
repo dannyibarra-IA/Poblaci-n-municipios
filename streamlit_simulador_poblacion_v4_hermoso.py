@@ -69,6 +69,9 @@ div[data-testid="stMetric"] [data-testid="stMetricValue"]{color:#102a43;font-wei
 .cta-primary,.cta-secondary{display:inline-block;border-radius:999px;padding:.72rem 1.05rem;font-weight:850;font-size:.92rem;text-decoration:none;border:1px solid rgba(16,42,67,.12);}
 .cta-primary{background:linear-gradient(135deg,#0d5c91,#2f7d6b);color:white!important;box-shadow:0 10px 24px rgba(13,92,145,.18);}
 .cta-secondary{background:rgba(255,255,255,.78);color:#102a43!important;}
+div.stButton > button, div.stDownloadButton > button{border-radius:999px!important;padding:.72rem 1.05rem!important;font-weight:850!important;border:1px solid rgba(16,42,67,.12)!important;box-shadow:0 8px 22px rgba(16,42,67,.08)!important;}
+div.stButton > button[kind="primary"]{background:linear-gradient(135deg,#0d5c91,#2f7d6b)!important;color:#fff!important;}
+div.stDownloadButton > button{background:rgba(255,255,255,.88)!important;color:#102a43!important;}
 .workflow{background:rgba(255,255,255,.78);border:1px solid rgba(16,42,67,.10);border-radius:24px;padding:1.1rem 1.25rem;margin:0 0 1rem 0;box-shadow:0 10px 26px rgba(16,42,67,.06);}
 .workflow-title{font-weight:950;font-size:1.25rem;color:#102a43;margin-bottom:.75rem;}
 .steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.85rem;}
@@ -242,6 +245,11 @@ def quick_insight(row, scenario_name):
     return f"Under **{scenario_name}**, **{row['city']}** shows **{risk.lower()} operational risk**, a **{light.lower()} circularity status**, a diversion rate of **{human_format(row['diversion_rate']*100,1)}%**, and approximately **{ytc_text}** before landfill exhaustion under current assumptions."
 
 # ------------------------- hero -------------------------
+if 'active_scenario' not in st.session_state:
+    st.session_state['active_scenario'] = 'BAU'
+if 'landing_action' not in st.session_state:
+    st.session_state['landing_action'] = ''
+
 st.markdown('''
 <div class="hero-box">
     <div class="hero-kicker">Circular waste futures lab</div>
@@ -254,13 +262,28 @@ st.markdown('''
     <div class="badge-row">
         <span class="badge">Open-source</span><span class="badge">Scenario-based</span><span class="badge">Landfill stress</span><span class="badge">Circularity analytics</span><span class="badge">Replicable in Latin America</span>
     </div>
-    <div class="cta-row">
-        <a class="cta-primary">Start simulation</a>
-        <a class="cta-secondary">Compare scenarios</a>
-        <a class="cta-secondary">Download template</a>
-    </div>
 </div>
 ''', unsafe_allow_html=True)
+
+cta1, cta2, cta3 = st.columns([1, 1, 1])
+with cta1:
+    if st.button('▶ Start simulation', type='primary', use_container_width=True):
+        st.session_state['active_scenario'] = 'BAU'
+        st.session_state['landing_action'] = 'Start with the BAU baseline and explore the projections below.'
+with cta2:
+    if st.button('🔁 Compare scenarios', use_container_width=True):
+        st.session_state['active_scenario'] = 'Optimistic Transition'
+        st.session_state['landing_action'] = 'Scenario comparison is ready. Open the Scenario comparison tab to compare futures.'
+with cta3:
+    st.download_button(
+        '⬇ Download template',
+        data=input_template_to_excel(DEFAULT_INPUTS),
+        file_name='city_inputs_template.xlsx',
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        use_container_width=True,
+    )
+if st.session_state.get('landing_action'):
+    st.success(st.session_state['landing_action'])
 
 st.markdown('''
 <div class="landing-grid">
@@ -285,7 +308,6 @@ st.sidebar.markdown('## Control room')
 st.sidebar.markdown('### 1. Simulation horizon')
 start_year = st.sidebar.number_input('Start year', min_value=2020, max_value=2050, value=2025, step=1)
 end_year = st.sidebar.number_input('End year', min_value=int(start_year)+1, max_value=2100, value=2050, step=1)
-if 'active_scenario' not in st.session_state: st.session_state['active_scenario'] = 'BAU'
 st.sidebar.markdown('### 2. Scenario selection')
 if st.sidebar.button('Baseline · BAU', use_container_width=True): st.session_state['active_scenario']='BAU'
 if st.sidebar.button('Stress test · Critical', use_container_width=True): st.session_state['active_scenario']='Critical Stress'
@@ -465,4 +487,3 @@ with tab10:
     with st.expander('Preview results'): st.dataframe(results, use_container_width=True)
 
 st.markdown('<div class="footer">Urban Waste Simulation and Circularity Observatory · Open-source decision-support software for circular waste planning.</div>', unsafe_allow_html=True)
-
